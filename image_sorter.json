@@ -1,0 +1,312 @@
+{
+    "presets": [
+        {
+            "name": "Modern.Elf.M.S",
+            "genre": "Modern",
+            "subgenre": "Elf",
+            "desc": "M",
+            "tag": "S",
+            "folder": "G:/AxlyOutput/Modern.elf.ma.s"
+        },
+        {
+            "name": "Fantasy.Human.Fe.S",
+            "genre": "Fantasy",
+            "subgenre": "Human",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Fant.Hum.Fe.s"
+        },
+        {
+            "name": "Landscape.Ancient.Ob.Photo",
+            "genre": "Landscape",
+            "subgenre": "Ancient",
+            "desc": "Ob",
+            "tag": "Photo",
+            "folder": "G:/AxlyOutput/Landscape.Ancient.Ob.Photo"
+        },
+        {
+            "name": "Landscape.Scifi.Ob.Photo",
+            "genre": "Landscape",
+            "subgenre": "Scifi",
+            "desc": "Ob",
+            "tag": "Photo",
+            "folder": "G:\\AxlyOutput\\Landscape.Scifi.Ob.Photo"
+        },
+        {
+            "name": "Scifi.Elf.Fe.N",
+            "genre": "Scifi",
+            "subgenre": "Elf",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\AxlyOutput\\Scifi.Elf.Fe.N"
+        },
+        {
+            "name": "Fantasy.Fairy.Fe.N",
+            "genre": "Fantasy",
+            "subgenre": "Fairy",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\AxlyOutput\\Fantasy.Fairy.Fe.S"
+        },
+        {
+            "name": "Fantasy.Elf.M.S",
+            "genre": "Fantasy",
+            "subgenre": "Elf",
+            "desc": "M",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\fantasy.elf.ma.s"
+        },
+        {
+            "name": "Modern.Elf.Fe.S",
+            "genre": "Modern",
+            "subgenre": "Elf",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:/AxlyOutput/Modern.elf.Fe.s"
+        },
+        {
+            "name": "Modern.Elf.Fe.N",
+            "genre": "Modern",
+            "subgenre": "Elf",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:/AxlyOutput/Modern.elf.Fe.n"
+        },
+        {
+            "name": "Modern.Human.Fe.S",
+            "genre": "Modern",
+            "subgenre": "Human",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:/AxlyOutput/Modern.humanFe.s"
+        },
+        {
+            "name": "Modern.Human.Fe.N",
+            "genre": "Modern",
+            "subgenre": "Human",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:/AxlyOutput/Modern.humanFe.n"
+        },
+        {
+            "name": "Fantasy.Human.Fe.N",
+            "genre": "Fantasy",
+            "subgenre": "Human",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\AxlyOutput\\Fant.Hum.Fe.N"
+        },
+        {
+            "name": "Scifi.Elf.Fe.S",
+            "genre": "Scifi",
+            "subgenre": "Elf",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Scifi.Elf.Fe.S"
+        },
+        {
+            "name": "Scifi.Human.M.S",
+            "genre": "Scifi",
+            "subgenre": "Human",
+            "desc": "M",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Scifi.Human.m.S"
+        },
+        {
+            "name": "Fantasy.Elf.Fe.N",
+            "genre": "Fantasy",
+            "subgenre": "Elf",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\AxlyOutput\\Fantasy.Elf.Fe.N"
+        },
+        {
+            "name": "Landscape.mount.Ob.Photo",
+            "genre": "Landscape",
+            "subgenre": "mount",
+            "desc": "Ob",
+            "tag": "Photo",
+            "folder": "G:/AxlyOutput/Landscapes.mount.ob.S"
+        },
+        {
+            "name": "Fantasy.Elf.Fe.S",
+            "genre": "Fantasy",
+            "subgenre": "Elf",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Fantasy.Elf.Fe.S"
+        },
+        {
+            "name": "Scifi.Human.Fe.S",
+            "genre": "Scifi",
+            "subgenre": "Human",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Scifi.Human.fe.S"
+        },
+        {
+            "name": "Scifi.Human.Fe.N",
+            "genre": "Scifi",
+            "subgenre": "Human",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\AxlyOutput\\Scifi.Human.fe.N"
+        },
+        {
+            "name": "Landscape.Dwell.Int.Photo",
+            "genre": "Landscape",
+            "subgenre": "Dwell",
+            "desc": "Int",
+            "tag": "Photo",
+            "folder": "G:/AxlyOutput/Landscape.dwell.Int.Photo"
+        },
+        {
+            "name": "Fantasy.Fairy.Fe.S",
+            "genre": "Fantasy",
+            "subgenre": "Fairy",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Fantasy.Fairy.Fe.S"
+        },
+        {
+            "name": "Fantasy.Human.M.S",
+            "genre": "Fantasy",
+            "subgenre": "Human",
+            "desc": "M",
+            "tag": "S",
+            "folder": "G:\\AxlyOutput\\Fant.Hum.M.s"
+        },
+        {
+            "name": "Landscape.phone.Ob.wallpaper",
+            "genre": "Landscape",
+            "subgenre": "phone",
+            "desc": "Ob",
+            "tag": "wallpaper",
+            "folder": "G:/AxlyOutput/Landscape.phone.Ob.wallpaper"
+        },
+        {
+            "name": "Landscape.3mon.Ob.wallpaper",
+            "genre": "Landscape",
+            "subgenre": "3mon",
+            "desc": "Ob",
+            "tag": "wallpaper",
+            "folder": "G:/AxlyOutput/Landscape.3mon.Ob.wallpaper"
+        },
+        {
+            "name": "Fantasy.OrcGob.Fe.S",
+            "genre": "Fantasy",
+            "subgenre": "OrcGob",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\Goblin_Orc_girls\\Fantasy.OrcGob.F.S"
+        },
+        {
+            "name": "Fantasy.OrcGob.Fe.N",
+            "genre": "Fantasy",
+            "subgenre": "OrcGob",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\Goblin_Orc_girls\\Fantasy.OrcGob.F.n"
+        },
+        {
+            "name": "Fantasy.Succ.Fe.N",
+            "genre": "Fantasy",
+            "subgenre": "Succ",
+            "desc": "Fe",
+            "tag": "N",
+            "folder": "G:\\Goblin_Orc_girls\\Fantasy.Succ.F.N"
+        },
+        {
+            "name": "Fantasy.Succ.Fe.S",
+            "genre": "Fantasy",
+            "subgenre": "Succ",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "G:\\Goblin_Orc_girls\\Fantasy.Succ.F.s"
+        },
+        {
+            "name": "upscaled.axly.com.S",
+            "genre": "upscaled",
+            "subgenre": "axly",
+            "desc": "com",
+            "tag": "S",
+            "folder": "C:/Users/zwolf/Downloads/New folder"
+        },
+        {
+            "name": "Scifi.alienlandscape.Ob.S2",
+            "genre": "Scifi",
+            "subgenre": "alienlandscape",
+            "desc": "Ob",
+            "tag": "S",
+            "folder": "H:/ImagesForDeviantART\\alienlanmd"
+        },
+        {
+            "name": "Fantasy.Angel.Fe.S",
+            "genre": "Fantasy",
+            "subgenre": "Angel",
+            "desc": "Fe",
+            "tag": "S",
+            "folder": "H:/ImagesForDeviantART\\Small"
+        },
+        {
+            "name": "Fantasy.Angel.fe.S",
+            "genre": "Fantasy",
+            "subgenre": "Angel",
+            "desc": "fe",
+            "tag": "S",
+            "folder": "G:/H_Invoke/Processed"
+        }
+    ],
+    "genres": [
+        "Axly",
+        "Fantasy",
+        "Landscape",
+        "Modern",
+        "Scifi",
+        "up",
+        "upscaled"
+    ],
+    "subgenres": [
+        "3mon",
+        "Ancient",
+        "Angel",
+        "Dwell",
+        "Elf",
+        "Fairy",
+        "Human",
+        "OrcGob",
+        "Scifi",
+        "Succ",
+        "alienlandscape",
+        "axly",
+        "com",
+        "mount",
+        "phone"
+    ],
+    "descs": [
+        "Axly.com",
+        "Fe",
+        "Int",
+        "M",
+        "Ob",
+        "com",
+        "fe",
+        "spl"
+    ],
+    "tags": [
+        "N",
+        "OP",
+        "Photo",
+        "S",
+        "WC",
+        "wallpaper"
+    ],
+    "settings": {
+        "use_genre": true,
+        "use_subgenre": true,
+        "use_size": true,
+        "use_desc": true,
+        "use_tag": true,
+        "watermark_path": "C:/Users/zwolf/Downloads/New folder/1024x1024.Axly.com.S.001.png"
+    }
+}
