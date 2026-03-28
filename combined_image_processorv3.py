@@ -1,7 +1,7 @@
 # combined_image_processorv3.py
 # Modern UI rewrite using CustomTkinter with dark/light mode toggle.
-# Dependencies: customtkinter, tkinterdnd2, pillow, piexif, portalocker
-# Install: pip install customtkinter tkinterdnd2 pillow piexif portalocker
+# Dependencies: customtkinter, tkinterdnd2, pillow, piexif
+# Install: pip install customtkinter tkinterdnd2 pillow piexif
 # Run: pythonw combined_image_processorv3.py
 
 import customtkinter as ctk
@@ -13,8 +13,10 @@ import shutil
 import glob
 import json
 import re
-import portalocker
 import piexif
+
+# Resolve paths relative to this script, not the working directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class DnDCTk(ctk.CTk, tkdnd.TkinterDnD.DnDWrapper):
@@ -35,7 +37,7 @@ class ImageProcessorApp:
         ctk.set_appearance_mode("dark")
         self.is_dark = True
 
-        self.json_file = "image_sorter.json"
+        self.json_file = os.path.join(_SCRIPT_DIR, "image_sorter.json")
         self.data = self.load_json()
 
         self.website_value = "axly.com"
@@ -65,11 +67,8 @@ class ImageProcessorApp:
 
     def load_json(self):
         if os.path.exists(self.json_file):
-            with open(self.json_file, 'r') as f:
-                portalocker.lock(f, portalocker.LOCK_SH)
-                data = json.load(f)
-                portalocker.unlock(f)
-                return data
+            with open(self.json_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
         return {
             "presets": [],
             "genres": [],
@@ -79,12 +78,10 @@ class ImageProcessorApp:
         }
 
     def save_json(self):
-        with open(self.json_file, 'w') as f:
-            portalocker.lock(f, portalocker.LOCK_EX)
+        with open(self.json_file, 'w', encoding='utf-8') as f:
             json.dump(self.data, f, indent=4)
             f.flush()
             os.fsync(f.fileno())
-            portalocker.unlock(f)
 
     # ── Settings persistence ──────────────────────────────────────────
 
@@ -348,8 +345,8 @@ class ImageProcessorApp:
         dialog.title("Settings")
         dialog.geometry("300x280")
         dialog.resizable(False, False)
-        dialog.grab_set()
         dialog.transient(self.root)
+        dialog.after(100, dialog.grab_set)
 
         ctk.CTkLabel(
             dialog, text="Filename Components",
@@ -391,7 +388,14 @@ class ImageProcessorApp:
         update_preview()
 
         def on_close():
-            self._save_settings()
+            try:
+                self._save_settings()
+            except Exception:
+                pass
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
             dialog.destroy()
 
         ctk.CTkButton(dialog, text="Close", width=100, command=on_close).pack(pady=10)
@@ -593,8 +597,8 @@ class ImageProcessorApp:
         dialog.title("Preset Name")
         dialog.geometry("320x150")
         dialog.resizable(False, False)
-        dialog.grab_set()
         dialog.transient(self.root)
+        dialog.after(100, dialog.grab_set)
 
         result = [None]
 
@@ -605,14 +609,21 @@ class ImageProcessorApp:
         entry.select_range(0, "end")
         entry.focus()
 
+        def _close_dialog():
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
         def on_ok():
             val = entry.get().strip()
             if val:
                 result[0] = val
-            dialog.destroy()
+            _close_dialog()
 
         def on_cancel():
-            dialog.destroy()
+            _close_dialog()
 
         btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         btn_frame.pack(pady=10)
@@ -699,10 +710,58 @@ class ImageProcessorApp:
         add_meta = self.add_var.get()
         add_wm = self.watermark_var.get()
 
-        for file_path in files:
-            self.process_image(file_path, genre, subgenre, desc, tag, folder, remove_meta, add_meta, add_wm)
+        # ── Batch pre-computation ─────────────────────────────────────
+        # Glob once to find the max existing index (not per-image)
+        pattern = self._build_glob_pattern(genre, subgenre, desc, tag)
+        existing_files = glob.glob(os.path.join(folder, pattern))
+        max_index = 0
+        for f in existing_files:
+            name_no_ext = os.path.splitext(os.path.basename(f))[0]
+            parts = name_no_ext.split('.')
+            if parts:
+                try:
+                    max_index = max(max_index, int(parts[-1]))
+                except ValueError:
+                    pass
+        next_index = max_index + 1
 
-        self._show_status(f"Processed {len(files)} image(s)!", duration=5000)
+        # Pre-load watermark image once
+        wm_img = None
+        if add_wm and self.watermark_path and os.path.exists(self.watermark_path):
+            try:
+                wm_img = Image.open(self.watermark_path).convert("RGBA")
+            except Exception:
+                wm_img = None
+
+        # Read studio settings (with safe fallbacks to original hardcoded values)
+        wm_settings  = self.data.get("settings", {})
+        wm_opacity   = float(wm_settings.get("watermark_opacity",  0.30))
+        wm_scale     = float(wm_settings.get("watermark_scale",    0.10))
+        wm_padding   = int(wm_settings.get("watermark_padding",    10))
+        wm_position  = wm_settings.get("watermark_position", "BR")
+
+        # Cache resized watermarks keyed by (width, scale, opacity)
+        wm_cache = {}
+
+        total = len(files)
+        for i, file_path in enumerate(files):
+            next_index = self.process_image(
+                file_path, genre, subgenre, desc, tag, folder,
+                remove_meta, add_meta, wm_img, wm_cache, next_index,
+                wm_opacity, wm_scale, wm_padding, wm_position
+            )
+            # Periodic UI update so the window stays responsive
+            if (i + 1) % 25 == 0 or i + 1 == total:
+                self._show_status(f"Processing {i + 1}/{total}...", duration=60000)
+                self.root.update_idletasks()
+
+        # Cleanup
+        if wm_img:
+            wm_img.close()
+        for wm in wm_cache.values():
+            wm.close()
+
+        self._show_status(f"Processed {total} image(s)!", duration=5000)
 
     # ── Image processing ──────────────────────────────────────────────
 
@@ -737,110 +796,95 @@ class ImageProcessorApp:
         parts.append("*")  # index
         return ".".join(parts) + ".*"
 
-    def process_image(self, file_path, genre, subgenre, desc, tag, folder, remove_meta, add_meta, add_watermark):
+    def process_image(self, file_path, genre, subgenre, desc, tag, folder,
+                      remove_meta, add_meta, wm_img, wm_cache, next_index,
+                      wm_opacity=0.30, wm_scale=0.10, wm_padding=10, wm_position="BR"):
+        """Process a single image. Returns the next available index."""
         if not os.path.exists(file_path):
             messagebox.showerror("Error", f"File not found: {file_path}")
-            return
+            return next_index
 
         new_path = None
         try:
-            base, ext = os.path.splitext(file_path)
-            ext_lower = ext.lower()
+            ext_lower = os.path.splitext(file_path)[1].lower()
             if ext_lower not in ('.jpg', '.jpeg', '.png'):
-                messagebox.showinfo("Skipped", f"Unsupported file type: {ext}. Only JPG/JPEG/PNG supported.")
-                return
+                messagebox.showinfo("Skipped", f"Unsupported file type: {ext_lower}. Only JPG/JPEG/PNG supported.")
+                return next_index
 
-            with Image.open(file_path) as img:
-                width, height = img.size
-                size_str = f"{width}x{height}"
+            # Open image once — used for dimensions AND processing
+            img = Image.open(file_path)
+            width, height = img.size
+            size_str = f"{width}x{height}"
 
-            # Find next index — index is always the last component before extension
-            pattern = self._build_glob_pattern(genre, subgenre, desc, tag)
-            existing_files = glob.glob(os.path.join(folder, pattern))
-            max_index = 0
-            for f in existing_files:
-                basename = os.path.basename(f)
-                name_no_ext = os.path.splitext(basename)[0]
-                name_parts = name_no_ext.split('.')
-                if name_parts:
-                    try:
-                        idx = int(name_parts[-1])
-                        max_index = max(max_index, idx)
-                    except ValueError:
-                        pass
-
-            next_index = max_index + 1
-            index_str = str(next_index).zfill(3)
-
-            # Build filename from enabled components + index
+            # Build filename with tracked index (no glob needed)
             name_parts = self._build_name_parts(genre, subgenre, size_str, desc, tag)
-            name_parts.append(index_str)
+            name_parts.append(str(next_index).zfill(3))
             new_name = ".".join(name_parts) + ext_lower
             new_path = os.path.join(folder, new_name)
 
-            # Handle potential dups
+            # Handle collisions with pre-existing files
             while os.path.exists(new_path):
                 next_index += 1
-                index_str = str(next_index).zfill(3)
-                name_parts[-1] = index_str
+                name_parts[-1] = str(next_index).zfill(3)
                 new_name = ".".join(name_parts) + ext_lower
                 new_path = os.path.join(folder, new_name)
 
-            if not remove_meta and not add_meta and not add_watermark:
+            # Fast path: no processing needed, just move the file
+            if not remove_meta and not add_meta and not wm_img:
+                img.close()
                 shutil.move(file_path, new_path)
-            else:
-                with Image.open(file_path).convert("RGBA") as img:
-                    if remove_meta:
-                        self.strip_metadata(img, new_path, ext_lower)
-                    else:
-                        out = img.convert("RGB") if ext_lower in ('.jpg', '.jpeg') else img
-                        out.save(new_path, quality=95)
+                return next_index + 1
 
-                    if add_meta:
-                        self.add_metadata(new_path, ext_lower)
+            # ── Single-pass processing pipeline ──
+            img = img.convert("RGBA")
 
-                    if add_watermark and self.watermark_path and os.path.exists(self.watermark_path):
-                        watermark = Image.open(self.watermark_path).convert("RGBA")
-                        scale_factor = 0.1
-                        new_width = int(img.width * scale_factor)
-                        ratio = new_width / watermark.width
-                        new_height = int(watermark.height * ratio)
-                        watermark = watermark.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        alpha = watermark.split()[3]
-                        alpha = alpha.point(lambda p: int(p * 0.3))
-                        watermark.putalpha(alpha)
-                        x = img.width - watermark.width - 10
-                        y = img.height - watermark.height - 10
-                        img.paste(watermark, (x, y), watermark)
-                        out = img.convert("RGB") if ext_lower in ('.jpg', '.jpeg') else img
-                        out.save(new_path, quality=95)
+            # Apply watermark to in-memory image (using cached resize)
+            if wm_img:
+                cache_key = (width, wm_scale, wm_opacity)
+                if cache_key not in wm_cache:
+                    new_wm_w = max(1, int(width * wm_scale))
+                    ratio    = new_wm_w / wm_img.width
+                    new_wm_h = max(1, int(wm_img.height * ratio))
+                    wm_resized = wm_img.resize((new_wm_w, new_wm_h), Image.Resampling.LANCZOS)
+                    r, g, b, a = wm_resized.split()
+                    a = a.point(lambda p: int(p * wm_opacity))
+                    wm_resized = Image.merge("RGBA", (r, g, b, a))
+                    wm_cache[cache_key] = wm_resized
+                wm = wm_cache[cache_key]
+                pad = wm_padding
+                x, y = {
+                    "TL": (pad,                      pad),
+                    "TR": (width  - wm.width  - pad, pad),
+                    "BL": (pad,                      height - wm.height - pad),
+                    "BR": (width  - wm.width  - pad, height - wm.height - pad),
+                }[wm_position]
+                img.paste(wm, (x, y), wm)
 
-                os.remove(file_path)
+            # Single save — metadata embedded in the same write
+            if ext_lower == '.png':
+                pnginfo = None
+                if add_meta:
+                    pnginfo = PngImagePlugin.PngInfo()
+                    pnginfo.add_text("Website", self.website_value)
+                    pnginfo.add_text("Copyright", self.copyright_value)
+                img.save(new_path, pnginfo=pnginfo)
+            else:  # jpg/jpeg
+                img.convert("RGB").save(new_path, quality=95)
+                if add_meta:
+                    exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+                    exif_dict['0th'][piexif.ImageIFD.ImageDescription] = f"Website: {self.website_value}".encode('utf-8')
+                    exif_dict['0th'][piexif.ImageIFD.Copyright] = self.copyright_value.encode('utf-8')
+                    piexif.insert(piexif.dump(exif_dict), new_path)
+
+            img.close()
+            os.remove(file_path)
+            return next_index + 1
 
         except Exception as e:
             messagebox.showerror("Oops!", f"Failed to process {file_path}: {str(e)}")
             if new_path and os.path.exists(new_path):
                 os.remove(new_path)
-
-    def strip_metadata(self, img, output_path, ext):
-        if ext == '.png':
-            img.save(output_path)
-        elif ext in ('.jpg', '.jpeg'):
-            img.convert("RGB").save(output_path, quality=95)
-
-    def add_metadata(self, file_path, ext):
-        if ext == '.png':
-            with Image.open(file_path) as img:
-                info = PngImagePlugin.PngInfo()
-                info.add_text("Website", self.website_value)
-                info.add_text("Copyright", self.copyright_value)
-                img.save(file_path, pnginfo=info)
-        elif ext in ('.jpg', '.jpeg'):
-            exif_dict = piexif.load(file_path) if os.path.getsize(file_path) > 0 else {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
-            exif_dict['0th'][piexif.ImageIFD.ImageDescription] = f"Website: {self.website_value}".encode('utf-8')
-            exif_dict['0th'][piexif.ImageIFD.Copyright] = self.copyright_value.encode('utf-8')
-            exif_bytes = piexif.dump(exif_dict)
-            piexif.insert(exif_bytes, file_path)
+            return next_index
 
 
 if __name__ == "__main__":

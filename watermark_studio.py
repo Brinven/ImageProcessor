@@ -1,0 +1,536 @@
+# watermark_studio.py
+# Standalone watermark designer — companion to Image Processor Elf (v3+)
+# Previews your watermark live on a test image; saves settings to image_sorter.json
+# so the main app picks them up automatically.
+#
+# Dependencies: customtkinter, tkinterdnd2, pillow
+# Install:      pip install customtkinter tkinterdnd2 pillow
+# Run:          pythonw watermark_studio.py
+
+import customtkinter as ctk
+from tkinter import filedialog
+import tkinterdnd2 as tkdnd
+from PIL import Image
+import os
+import json
+import re
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+JSON_FILE = os.path.join(_SCRIPT_DIR, "image_sorter.json")
+
+
+# ── Drag-and-drop enabled root ─────────────────────────────────────────────────
+
+class DnDCTk(ctk.CTk, tkdnd.TkinterDnD.DnDWrapper):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.TkdndVersion = tkdnd.TkinterDnD._require(self)
+
+
+# ── Main app ───────────────────────────────────────────────────────────────────
+
+class WatermarkStudio:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Watermark Studio")
+        self.root.geometry("920x600")
+        self.root.minsize(780, 500)
+
+        ctk.set_default_color_theme("blue")
+        ctk.set_appearance_mode("dark")
+
+        # Internal state
+        self.wm_path   = ""
+        self.test_path = ""
+        self.wm_img    = None   # PIL RGBA — never mutated after load
+        self.test_img  = None   # PIL RGBA — never mutated after load
+        self.position  = "BR"
+
+        self._preview_job     = None
+        self._preview_ctk_img = None
+        self._opacity_val     = 0.30   # 0.0 – 1.0
+        self._scale_val       = 0.10   # fraction of image width
+        self._padding_val     = 10     # pixels from edge
+
+        self._load_settings()
+        self._build_ui()
+        self._schedule_preview()
+
+        # DnD — whole window is the target; we route by drop location
+        self.root.drop_target_register(tkdnd.DND_FILES)
+        self.root.dnd_bind('<<Drop>>', self._on_drop)
+
+    # ── JSON helpers ───────────────────────────────────────────────────────────
+
+    def _read_json(self):
+        if os.path.exists(JSON_FILE):
+            with open(JSON_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+
+    def _write_json(self, data):
+        with open(JSON_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def _load_settings(self):
+        s = self._read_json().get("settings", {})
+        self.wm_path       = s.get("watermark_path",       "")
+        self._opacity_val  = float(s.get("watermark_opacity",  0.30))
+        self._scale_val    = float(s.get("watermark_scale",    0.10))
+        self._padding_val  = int(s.get("watermark_padding",   10))
+        self.position      = s.get("watermark_position",   "BR")
+        self.test_path     = s.get("watermark_test_image", "")
+
+        if self.wm_path and os.path.exists(self.wm_path):
+            try:
+                self.wm_img = Image.open(self.wm_path).convert("RGBA")
+            except Exception:
+                self.wm_img = None
+
+        if self.test_path and os.path.exists(self.test_path):
+            try:
+                self.test_img = Image.open(self.test_path).convert("RGBA")
+            except Exception:
+                self.test_img = None
+
+    def _save_settings(self):
+        data = self._read_json()
+        s = data.get("settings", {})
+        s.update({
+            "watermark_path":       self.wm_path,
+            "watermark_opacity":    round(self._opacity_val, 4),
+            "watermark_scale":      round(self._scale_val,   4),
+            "watermark_padding":    int(self._padding_val),
+            "watermark_position":   self.position,
+            "watermark_test_image": self.test_path,
+        })
+        data["settings"] = s
+        self._write_json(data)
+
+    # ── UI construction ────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        self.root.grid_columnconfigure(0, weight=0)
+        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=0)
+
+        self._build_left_panel()
+        self._build_right_panel()
+        self._build_status_bar()
+
+        self.root.bind("<Configure>", self._on_resize)
+
+    # ── Left control panel ─────────────────────────────────────────────────────
+
+    def _build_left_panel(self):
+        left = ctk.CTkFrame(self.root, width=268, corner_radius=0,
+                            fg_color=("gray90", "gray13"))
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_propagate(False)
+
+        inner = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        inner.pack(fill="both", expand=True)
+
+        # App title
+        ctk.CTkLabel(
+            inner, text="WATERMARK STUDIO",
+            font=ctk.CTkFont(family="Courier New", size=13, weight="bold"),
+            text_color=("#F5A623", "#F5A623")
+        ).pack(anchor="w", padx=14, pady=(14, 12))
+
+        # Watermark file
+        self._section_label(inner, "WATERMARK FILE")
+        wm_row = ctk.CTkFrame(inner, fg_color="transparent")
+        wm_row.pack(fill="x", padx=10, pady=(2, 2))
+        self.wm_path_label = ctk.CTkLabel(
+            wm_row, text=self._fmt_path(self.wm_path) or "No file selected",
+            font=ctk.CTkFont(family="Courier New", size=9),
+            text_color=("gray40", "gray60"),
+            wraplength=165, justify="left", anchor="w"
+        )
+        self.wm_path_label.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(wm_row, text="Browse", width=66, height=26,
+                      command=self._browse_wm).pack(side="right")
+
+        ctk.CTkLabel(inner, text="or drop a PNG anywhere on this window",
+                     font=ctk.CTkFont(family="Courier New", size=9),
+                     text_color=("gray50", "gray50")
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+
+        # Test image
+        self._section_label(inner, "TEST IMAGE")
+        test_row = ctk.CTkFrame(inner, fg_color="transparent")
+        test_row.pack(fill="x", padx=10, pady=(2, 10))
+        self.test_path_label = ctk.CTkLabel(
+            test_row, text=self._fmt_path(self.test_path) or "No file selected",
+            font=ctk.CTkFont(family="Courier New", size=9),
+            text_color=("gray40", "gray60"),
+            wraplength=165, justify="left", anchor="w"
+        )
+        self.test_path_label.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(test_row, text="Browse", width=66, height=26,
+                      command=self._browse_test).pack(side="right")
+
+        # Opacity slider
+        self._section_label(inner, "OPACITY")
+        self.opacity_lbl = self._val_label(inner, f"{int(self._opacity_val * 100)}%")
+        self.opacity_slider = ctk.CTkSlider(inner, from_=0, to=100,
+                                            command=self._on_opacity)
+        self.opacity_slider.pack(fill="x", padx=10, pady=(0, 10))
+        self.opacity_slider.set(self._opacity_val * 100)
+
+        # Scale slider
+        self._section_label(inner, "SCALE  (% of image width)")
+        self.scale_lbl = self._val_label(inner, f"{int(self._scale_val * 100)}%")
+        self.scale_slider = ctk.CTkSlider(inner, from_=1, to=40,
+                                          command=self._on_scale)
+        self.scale_slider.pack(fill="x", padx=10, pady=(0, 10))
+        self.scale_slider.set(self._scale_val * 100)
+
+        # Padding slider
+        self._section_label(inner, "EDGE PADDING  (px)")
+        self.pad_lbl = self._val_label(inner, f"{int(self._padding_val)}px")
+        self.pad_slider = ctk.CTkSlider(inner, from_=0, to=120,
+                                        command=self._on_padding)
+        self.pad_slider.pack(fill="x", padx=10, pady=(0, 10))
+        self.pad_slider.set(self._padding_val)
+
+        # Position picker (2×2 grid of corner buttons)
+        self._section_label(inner, "POSITION")
+        pos_grid = ctk.CTkFrame(inner, fg_color="transparent")
+        pos_grid.pack(padx=10, pady=(4, 10))
+        self._pos_btns = {}
+        for key, r, c in [("TL", 0, 0), ("TR", 0, 1), ("BL", 1, 0), ("BR", 1, 1)]:
+            selected = (key == self.position)
+            btn = ctk.CTkButton(
+                pos_grid, text=key, width=56, height=38,
+                font=ctk.CTkFont(family="Courier New", size=12, weight="bold"),
+                fg_color=("#F5A623", "#F5A623") if selected else ("gray75", "gray25"),
+                text_color="gray10" if selected else ("gray20", "gray80"),
+                hover_color=("#D4891E", "#D4891E") if selected else ("gray65", "gray35"),
+                command=lambda k=key: self._set_position(k)
+            )
+            btn.grid(row=r, column=c, padx=4, pady=4)
+            self._pos_btns[key] = btn
+
+        # Divider
+        ctk.CTkFrame(inner, height=1,
+                     fg_color=("gray70", "gray30")).pack(fill="x", padx=10, pady=(6, 12))
+
+        # Save button (primary)
+        ctk.CTkButton(
+            inner, text="💾  Save to JSON",
+            height=38,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=("#F5A623", "#F5A623"),
+            text_color="gray10",
+            hover_color=("#D4891E", "#D4891E"),
+            command=self._save_and_confirm
+        ).pack(fill="x", padx=10, pady=(0, 6))
+
+        # Export button (secondary)
+        ctk.CTkButton(
+            inner, text="📤  Export Test Render",
+            height=32,
+            font=ctk.CTkFont(size=11),
+            command=self._export_render
+        ).pack(fill="x", padx=10, pady=(0, 14))
+
+    def _section_label(self, parent, text):
+        ctk.CTkLabel(
+            parent, text=text,
+            font=ctk.CTkFont(family="Courier New", size=9, weight="bold"),
+            text_color=("gray50", "gray50")
+        ).pack(anchor="w", padx=14, pady=(8, 2))
+
+    def _val_label(self, parent, text):
+        """Right-aligned amber value readout above a slider."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=(0, 2))
+        lbl = ctk.CTkLabel(
+            row, text=text,
+            font=ctk.CTkFont(family="Courier New", size=13, weight="bold"),
+            text_color=("#F5A623", "#F5A623")
+        )
+        lbl.pack(side="right")
+        return lbl
+
+    # ── Right preview panel ────────────────────────────────────────────────────
+
+    def _build_right_panel(self):
+        right = ctk.CTkFrame(self.root, corner_radius=0,
+                             fg_color=("gray85", "gray10"))
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_rowconfigure(0, weight=0)
+        right.grid_rowconfigure(1, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        # Header bar
+        hdr = ctk.CTkFrame(right, height=38, corner_radius=0,
+                           fg_color=("gray80", "gray16"))
+        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid_propagate(False)
+        ctk.CTkLabel(hdr, text="LIVE PREVIEW",
+                     font=ctk.CTkFont(family="Courier New", size=11, weight="bold"),
+                     text_color=("gray40", "gray55")
+        ).pack(side="left", padx=14, pady=0)
+        self.info_label = ctk.CTkLabel(
+            hdr, text="",
+            font=ctk.CTkFont(family="Courier New", size=9),
+            text_color=("gray50", "gray50")
+        )
+        self.info_label.pack(side="right", padx=14)
+
+        # Preview image label (fills remaining space)
+        self.preview_label = ctk.CTkLabel(
+            right,
+            text="Load a watermark and a test image to begin\n\n"
+                 "Browse using the panel on the left,\nor drop files anywhere on this window.",
+            font=ctk.CTkFont(family="Courier New", size=12),
+            text_color=("gray55", "gray45"),
+            corner_radius=0,
+            fg_color=("gray78", "gray17")
+        )
+        self.preview_label.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+
+    def _build_status_bar(self):
+        self.status_bar = ctk.CTkLabel(
+            self.root, text="",
+            font=ctk.CTkFont(family="Courier New", size=10),
+            text_color=("#4CAF50", "#4CAF50"),
+            height=26, anchor="w"
+        )
+        self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(2, 4))
+
+    # ── Slider callbacks ───────────────────────────────────────────────────────
+
+    def _on_opacity(self, val):
+        self._opacity_val = float(val) / 100.0
+        self.opacity_lbl.configure(text=f"{int(val)}%")
+        self._schedule_preview()
+
+    def _on_scale(self, val):
+        self._scale_val = float(val) / 100.0
+        self.scale_lbl.configure(text=f"{int(val)}%")
+        self._schedule_preview()
+
+    def _on_padding(self, val):
+        self._padding_val = int(val)
+        self.pad_lbl.configure(text=f"{int(val)}px")
+        self._schedule_preview()
+
+    def _set_position(self, key):
+        self.position = key
+        for k, btn in self._pos_btns.items():
+            if k == key:
+                btn.configure(
+                    fg_color=("#F5A623", "#F5A623"),
+                    text_color="gray10",
+                    hover_color=("#D4891E", "#D4891E")
+                )
+            else:
+                btn.configure(
+                    fg_color=("gray75", "gray25"),
+                    text_color=("gray20", "gray80"),
+                    hover_color=("gray65", "gray35")
+                )
+        self._schedule_preview()
+
+    def _on_resize(self, event):
+        if event.widget is self.root:
+            self._schedule_preview()
+
+    # ── Browse / load helpers ──────────────────────────────────────────────────
+
+    def _browse_wm(self):
+        path = filedialog.askopenfilename(
+            title="Select Watermark Image",
+            filetypes=[("PNG images", "*.png"),
+                       ("All images", "*.png *.jpg *.jpeg *.bmp *.gif"),
+                       ("All files", "*.*")]
+        )
+        if path:
+            self._load_wm(path)
+
+    def _browse_test(self):
+        path = filedialog.askopenfilename(
+            title="Select Test Image",
+            filetypes=[("Images", "*.jpg *.jpeg *.png *.bmp"),
+                       ("All files", "*.*")]
+        )
+        if path:
+            self._load_test(path)
+
+    def _load_wm(self, path):
+        try:
+            self.wm_img  = Image.open(path).convert("RGBA")
+            self.wm_path = path
+            self.wm_path_label.configure(text=self._fmt_path(path))
+            self._schedule_preview()
+            self._status(f"Watermark loaded — {os.path.basename(path)}")
+        except Exception as e:
+            self._status(f"Could not load watermark: {e}", error=True)
+
+    def _load_test(self, path):
+        try:
+            self.test_img  = Image.open(path).convert("RGBA")
+            self.test_path = path
+            self.test_path_label.configure(text=self._fmt_path(path))
+            self._schedule_preview()
+            self._status(f"Test image loaded — {os.path.basename(path)}")
+        except Exception as e:
+            self._status(f"Could not load image: {e}", error=True)
+
+    # ── Drag-and-drop handler ──────────────────────────────────────────────────
+
+    def _on_drop(self, event):
+        files = []
+        for m in re.findall(r'(?:\{([^\}]*)\}|([^\s]+))', event.data):
+            p = m[0] or m[1]
+            if p:
+                files.append(p)
+
+        for path in files:
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in ('.png', '.jpg', '.jpeg', '.bmp', '.gif'):
+                continue
+            name = os.path.basename(path).lower()
+            # Route: if filename hints watermark, or no wm loaded yet → watermark slot
+            if not self.wm_img or any(x in name for x in ('wm', 'watermark', 'logo', 'mark', 'stamp')):
+                self._load_wm(path)
+            else:
+                self._load_test(path)
+
+    # ── Preview compositing ────────────────────────────────────────────────────
+
+    def _schedule_preview(self):
+        """Debounce: only refresh 80 ms after the last change."""
+        if self._preview_job:
+            self.root.after_cancel(self._preview_job)
+        self._preview_job = self.root.after(80, self._refresh_preview)
+
+    def _refresh_preview(self):
+        self._preview_job = None
+
+        if not self.test_img:
+            self.preview_label.configure(
+                image=None,
+                text="Load a watermark and a test image to begin\n\n"
+                     "Browse using the panel on the left,\nor drop files anywhere on this window."
+            )
+            self._preview_ctk_img = None
+            self.info_label.configure(text="")
+            return
+
+        composited = self._composite(self.test_img, self.wm_img)
+
+        # Scale to fit the preview label widget
+        pw = max(self.preview_label.winfo_width(),  100)
+        ph = max(self.preview_label.winfo_height(), 100)
+        iw, ih = composited.size
+        ratio   = min(pw / iw, ph / ih, 1.0)
+        dw = max(1, int(iw * ratio))
+        dh = max(1, int(ih * ratio))
+        display = composited.resize((dw, dh), Image.Resampling.LANCZOS)
+
+        self._preview_ctk_img = ctk.CTkImage(
+            light_image=display, dark_image=display, size=(dw, dh)
+        )
+        self.preview_label.configure(image=self._preview_ctk_img, text="")
+
+        wm_label = f"no watermark" if not self.wm_img else \
+                   f"scale {int(self._scale_val * 100)}%  ·  opacity {int(self._opacity_val * 100)}%  ·  {self.position}  ·  pad {int(self._padding_val)}px"
+        self.info_label.configure(text=f"{iw}×{ih}  ·  {wm_label}")
+
+    def _composite(self, base_img, wm_img):
+        """Composite watermark onto base. Returns new PIL image; never mutates originals."""
+        result = base_img.copy().convert("RGBA")
+        if wm_img is None:
+            return result
+
+        w, h = result.size
+
+        # Scale watermark to target width
+        new_wm_w = max(1, int(w * self._scale_val))
+        ratio    = new_wm_w / wm_img.width
+        new_wm_h = max(1, int(wm_img.height * ratio))
+        wm = wm_img.resize((new_wm_w, new_wm_h), Image.Resampling.LANCZOS)
+
+        # Apply opacity — multiply alpha channel by the opacity fraction
+        r, g, b, a = wm.split()
+        a = a.point(lambda p: int(p * self._opacity_val))
+        wm = Image.merge("RGBA", (r, g, b, a))
+
+        # Resolve corner position
+        pad = int(self._padding_val)
+        x, y = {
+            "TL": (pad,                       pad),
+            "TR": (w - wm.width - pad,        pad),
+            "BL": (pad,                       h - wm.height - pad),
+            "BR": (w - wm.width - pad,        h - wm.height - pad),
+        }[self.position]
+
+        result.paste(wm, (x, y), wm)
+        return result
+
+    # ── Save / export ──────────────────────────────────────────────────────────
+
+    def _save_and_confirm(self):
+        try:
+            self._save_settings()
+            self._status(
+                f"Saved → opacity {int(self._opacity_val * 100)}%  "
+                f"scale {int(self._scale_val * 100)}%  "
+                f"pos {self.position}  "
+                f"pad {int(self._padding_val)}px  ·  "
+                f"Image Processor Elf will use these settings automatically."
+            )
+        except Exception as e:
+            self._status(f"Save failed: {e}", error=True)
+
+    def _export_render(self):
+        if not self.test_img:
+            self._status("Load a test image first.", error=True)
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Save Test Render",
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg *.jpeg")]
+        )
+        if not path:
+            return
+
+        try:
+            composited = self._composite(self.test_img, self.wm_img)
+            ext = os.path.splitext(path)[1].lower()
+            if ext in ('.jpg', '.jpeg'):
+                composited.convert("RGB").save(path, quality=95)
+            else:
+                composited.save(path)
+            self._status(f"Exported: {os.path.basename(path)}")
+        except Exception as e:
+            self._status(f"Export failed: {e}", error=True)
+
+    # ── Utilities ──────────────────────────────────────────────────────────────
+
+    def _fmt_path(self, path):
+        if not path:
+            return ""
+        return ("…" + path[-27:]) if len(path) > 30 else path
+
+    def _status(self, msg, error=False):
+        color = "#E74C3C" if error else "#4CAF50"
+        self.status_bar.configure(text=msg, text_color=color)
+        self.root.after(8000, lambda: self.status_bar.configure(text=""))
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    root = DnDCTk()
+    app  = WatermarkStudio(root)
+    root.mainloop()
