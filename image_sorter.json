@@ -307,6 +307,13 @@
         "use_size": true,
         "use_desc": true,
         "use_tag": true,
-        "watermark_path": "C:/Users/zwolf/Downloads/New folder/1024x1024.Axly.com.S.001.png"
+        "watermark_path": "C:/Users/zwolf/Downloads/axlyWM1_negative_clean.png",
+        "watermark_path_negative": "C:/Users/zwolf/Downloads/axlyWM1_negative_negative.png",
+        "watermark_opacity": 1.0,
+        "watermark_scale": 0.1378,
+        "watermark_padding": 10,
+        "watermark_bg_tolerance": 0,
+        "watermark_position": "BR",
+        "watermark_test_image": "H:/Image For Posting/Image 25/2102a1be-f958-4c5d-8574-04166fbf7295.png"
     }
 }

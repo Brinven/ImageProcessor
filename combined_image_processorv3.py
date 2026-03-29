@@ -725,14 +725,6 @@ class ImageProcessorApp:
                     pass
         next_index = max_index + 1
 
-        # Pre-load watermark image once
-        wm_img = None
-        if add_wm and self.watermark_path and os.path.exists(self.watermark_path):
-            try:
-                wm_img = Image.open(self.watermark_path).convert("RGBA")
-            except Exception:
-                wm_img = None
-
         # Read studio settings (with safe fallbacks to original hardcoded values)
         wm_settings  = self.data.get("settings", {})
         wm_opacity   = float(wm_settings.get("watermark_opacity",  0.30))
@@ -740,15 +732,31 @@ class ImageProcessorApp:
         wm_padding   = int(wm_settings.get("watermark_padding",    10))
         wm_position  = wm_settings.get("watermark_position", "BR")
 
-        # Cache resized watermarks keyed by (width, scale, opacity)
+        # Pre-load watermark image(s) once
+        wm_img = None
+        wm_neg_img = None
+        if add_wm and self.watermark_path and os.path.exists(self.watermark_path):
+            try:
+                wm_img = Image.open(self.watermark_path).convert("RGBA")
+            except Exception:
+                wm_img = None
+            # Load negative variant if available
+            neg_path = wm_settings.get("watermark_path_negative", "")
+            if neg_path and os.path.exists(neg_path):
+                try:
+                    wm_neg_img = Image.open(neg_path).convert("RGBA")
+                except Exception:
+                    wm_neg_img = None
+
+        # Cache resized watermarks keyed by (width, scale, opacity, is_negative)
         wm_cache = {}
 
         total = len(files)
         for i, file_path in enumerate(files):
             next_index = self.process_image(
                 file_path, genre, subgenre, desc, tag, folder,
-                remove_meta, add_meta, wm_img, wm_cache, next_index,
-                wm_opacity, wm_scale, wm_padding, wm_position
+                remove_meta, add_meta, wm_img, wm_neg_img, wm_cache,
+                next_index, wm_opacity, wm_scale, wm_padding, wm_position
             )
             # Periodic UI update so the window stays responsive
             if (i + 1) % 25 == 0 or i + 1 == total:
@@ -758,6 +766,8 @@ class ImageProcessorApp:
         # Cleanup
         if wm_img:
             wm_img.close()
+        if wm_neg_img:
+            wm_neg_img.close()
         for wm in wm_cache.values():
             wm.close()
 
@@ -797,8 +807,9 @@ class ImageProcessorApp:
         return ".".join(parts) + ".*"
 
     def process_image(self, file_path, genre, subgenre, desc, tag, folder,
-                      remove_meta, add_meta, wm_img, wm_cache, next_index,
-                      wm_opacity=0.30, wm_scale=0.10, wm_padding=10, wm_position="BR"):
+                      remove_meta, add_meta, wm_img, wm_neg_img, wm_cache,
+                      next_index, wm_opacity=0.30, wm_scale=0.10,
+                      wm_padding=10, wm_position="BR"):
         """Process a single image. Returns the next available index."""
         if not os.path.exists(file_path):
             messagebox.showerror("Error", f"File not found: {file_path}")
@@ -840,12 +851,34 @@ class ImageProcessorApp:
 
             # Apply watermark to in-memory image (using cached resize)
             if wm_img:
-                cache_key = (width, wm_scale, wm_opacity)
+                # Auto-select variant based on region luminance
+                chosen_wm = wm_img
+                neg_flag = False
+                if wm_neg_img:
+                    _wm_w = max(1, int(width * wm_scale))
+                    _wm_h = max(1, int(wm_img.height * (_wm_w / wm_img.width)))
+                    _pad = wm_padding
+                    _x, _y = {
+                        "TL": (_pad, _pad),
+                        "TR": (width - _wm_w - _pad, _pad),
+                        "BL": (_pad, height - _wm_h - _pad),
+                        "BR": (width - _wm_w - _pad, height - _wm_h - _pad),
+                    }[wm_position]
+                    _region = img.crop((max(0, _x), max(0, _y),
+                                       min(width, _x + _wm_w),
+                                       min(height, _y + _wm_h)))
+                    _data = _region.convert("L").tobytes()
+                    _lum = sum(_data) / len(_data) if _data else 128
+                    if _lum <= 128:
+                        chosen_wm = wm_neg_img
+                        neg_flag = True
+
+                cache_key = (width, wm_scale, wm_opacity, neg_flag)
                 if cache_key not in wm_cache:
                     new_wm_w = max(1, int(width * wm_scale))
-                    ratio    = new_wm_w / wm_img.width
-                    new_wm_h = max(1, int(wm_img.height * ratio))
-                    wm_resized = wm_img.resize((new_wm_w, new_wm_h), Image.Resampling.LANCZOS)
+                    ratio    = new_wm_w / chosen_wm.width
+                    new_wm_h = max(1, int(chosen_wm.height * ratio))
+                    wm_resized = chosen_wm.resize((new_wm_w, new_wm_h), Image.Resampling.LANCZOS)
                     r, g, b, a = wm_resized.split()
                     a = a.point(lambda p: int(p * wm_opacity))
                     wm_resized = Image.merge("RGBA", (r, g, b, a))

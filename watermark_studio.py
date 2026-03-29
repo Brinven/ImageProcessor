@@ -10,7 +10,7 @@
 import customtkinter as ctk
 from tkinter import filedialog
 import tkinterdnd2 as tkdnd
-from PIL import Image
+from PIL import Image, ImageChops, ImageOps
 import os
 import json
 import re
@@ -40,17 +40,21 @@ class WatermarkStudio:
         ctk.set_appearance_mode("dark")
 
         # Internal state
-        self.wm_path   = ""
-        self.test_path = ""
-        self.wm_img    = None   # PIL RGBA — never mutated after load
-        self.test_img  = None   # PIL RGBA — never mutated after load
-        self.position  = "BR"
+        self.wm_path     = ""
+        self.wm_neg_path = ""
+        self.test_path   = ""
+        self.wm_img      = None   # PIL RGBA — current (after bg removal)
+        self._wm_original = None  # PIL RGBA — as loaded, before bg removal
+        self.wm_neg_img  = None   # PIL RGBA — negative variant
+        self.test_img    = None   # PIL RGBA — never mutated after load
+        self.position    = "BR"
 
-        self._preview_job     = None
-        self._preview_ctk_img = None
-        self._opacity_val     = 0.30   # 0.0 – 1.0
-        self._scale_val       = 0.10   # fraction of image width
-        self._padding_val     = 10     # pixels from edge
+        self._preview_job       = None
+        self._preview_ctk_img   = None
+        self._opacity_val       = 0.30   # 0.0 – 1.0
+        self._scale_val         = 0.10   # fraction of image width
+        self._padding_val       = 10     # pixels from edge
+        self._bg_tolerance_val  = 0      # 0 = off, 1-100 = active
 
         self._load_settings()
         self._build_ui()
@@ -77,17 +81,29 @@ class WatermarkStudio:
     def _load_settings(self):
         s = self._read_json().get("settings", {})
         self.wm_path       = s.get("watermark_path",       "")
+        self.wm_neg_path   = s.get("watermark_path_negative", "")
         self._opacity_val  = float(s.get("watermark_opacity",  0.30))
         self._scale_val    = float(s.get("watermark_scale",    0.10))
         self._padding_val  = int(s.get("watermark_padding",   10))
+        self._bg_tolerance_val = int(s.get("watermark_bg_tolerance", 0))
         self.position      = s.get("watermark_position",   "BR")
         self.test_path     = s.get("watermark_test_image", "")
 
         if self.wm_path and os.path.exists(self.wm_path):
             try:
-                self.wm_img = Image.open(self.wm_path).convert("RGBA")
+                self._wm_original = Image.open(self.wm_path).convert("RGBA")
+                self.wm_img = self._wm_original.copy()
+                if self._bg_tolerance_val > 0:
+                    self._apply_bg_removal()
             except Exception:
+                self._wm_original = None
                 self.wm_img = None
+
+        if self.wm_neg_path and os.path.exists(self.wm_neg_path):
+            try:
+                self.wm_neg_img = Image.open(self.wm_neg_path).convert("RGBA")
+            except Exception:
+                self.wm_neg_img = None
 
         if self.test_path and os.path.exists(self.test_path):
             try:
@@ -99,12 +115,14 @@ class WatermarkStudio:
         data = self._read_json()
         s = data.get("settings", {})
         s.update({
-            "watermark_path":       self.wm_path,
-            "watermark_opacity":    round(self._opacity_val, 4),
-            "watermark_scale":      round(self._scale_val,   4),
-            "watermark_padding":    int(self._padding_val),
-            "watermark_position":   self.position,
-            "watermark_test_image": self.test_path,
+            "watermark_path":           self.wm_path,
+            "watermark_path_negative":  self.wm_neg_path,
+            "watermark_opacity":        round(self._opacity_val, 4),
+            "watermark_scale":          round(self._scale_val,   4),
+            "watermark_padding":        int(self._padding_val),
+            "watermark_bg_tolerance":   int(self._bg_tolerance_val),
+            "watermark_position":       self.position,
+            "watermark_test_image":     self.test_path,
         })
         data["settings"] = s
         self._write_json(data)
@@ -141,38 +159,59 @@ class WatermarkStudio:
             text_color=("#F5A623", "#F5A623")
         ).pack(anchor="w", padx=14, pady=(14, 12))
 
-        # Watermark file
+        # Watermark file — dedicated drop zone
         self._section_label(inner, "WATERMARK FILE")
-        wm_row = ctk.CTkFrame(inner, fg_color="transparent")
-        wm_row.pack(fill="x", padx=10, pady=(2, 2))
+        self.wm_drop_zone = ctk.CTkFrame(
+            inner, height=48, corner_radius=8,
+            border_width=2, border_color=("#F5A623", "#F5A623"),
+            fg_color=("gray82", "gray18")
+        )
+        self.wm_drop_zone.pack(fill="x", padx=10, pady=(2, 2))
+        self.wm_drop_zone.pack_propagate(False)
         self.wm_path_label = ctk.CTkLabel(
-            wm_row, text=self._fmt_path(self.wm_path) or "No file selected",
+            self.wm_drop_zone,
+            text=self._fmt_path(self.wm_path) or "Drop watermark here",
             font=ctk.CTkFont(family="Courier New", size=9),
             text_color=("gray40", "gray60"),
-            wraplength=165, justify="left", anchor="w"
+            wraplength=220, justify="center"
         )
-        self.wm_path_label.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(wm_row, text="Browse", width=66, height=26,
-                      command=self._browse_wm).pack(side="right")
+        self.wm_path_label.pack(fill="both", expand=True)
 
-        ctk.CTkLabel(inner, text="or drop a PNG anywhere on this window",
-                     font=ctk.CTkFont(family="Courier New", size=9),
-                     text_color=("gray50", "gray50")
-        ).pack(anchor="w", padx=14, pady=(0, 10))
+        wm_btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+        wm_btn_row.pack(fill="x", padx=10, pady=(2, 10))
+        ctk.CTkButton(wm_btn_row, text="Browse", width=66, height=26,
+                      command=self._browse_wm).pack(side="left")
+        ctk.CTkButton(wm_btn_row, text="✕ Clear", width=66, height=26,
+                      fg_color=("gray70", "gray30"),
+                      hover_color=("gray60", "gray40"),
+                      command=self._clear_wm).pack(side="right")
 
-        # Test image
+        # Test image — dedicated drop zone
         self._section_label(inner, "TEST IMAGE")
-        test_row = ctk.CTkFrame(inner, fg_color="transparent")
-        test_row.pack(fill="x", padx=10, pady=(2, 10))
+        self.test_drop_zone = ctk.CTkFrame(
+            inner, height=48, corner_radius=8,
+            border_width=2, border_color=("#3B8ED0", "#3B8ED0"),
+            fg_color=("gray82", "gray18")
+        )
+        self.test_drop_zone.pack(fill="x", padx=10, pady=(2, 2))
+        self.test_drop_zone.pack_propagate(False)
         self.test_path_label = ctk.CTkLabel(
-            test_row, text=self._fmt_path(self.test_path) or "No file selected",
+            self.test_drop_zone,
+            text=self._fmt_path(self.test_path) or "Drop test image here",
             font=ctk.CTkFont(family="Courier New", size=9),
             text_color=("gray40", "gray60"),
-            wraplength=165, justify="left", anchor="w"
+            wraplength=220, justify="center"
         )
-        self.test_path_label.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(test_row, text="Browse", width=66, height=26,
-                      command=self._browse_test).pack(side="right")
+        self.test_path_label.pack(fill="both", expand=True)
+
+        test_btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+        test_btn_row.pack(fill="x", padx=10, pady=(2, 10))
+        ctk.CTkButton(test_btn_row, text="Browse", width=66, height=26,
+                      command=self._browse_test).pack(side="left")
+        ctk.CTkButton(test_btn_row, text="✕ Clear", width=66, height=26,
+                      fg_color=("gray70", "gray30"),
+                      hover_color=("gray60", "gray40"),
+                      command=self._clear_test).pack(side="right")
 
         # Opacity slider
         self._section_label(inner, "OPACITY")
@@ -215,6 +254,41 @@ class WatermarkStudio:
             )
             btn.grid(row=r, column=c, padx=4, pady=4)
             self._pos_btns[key] = btn
+
+        # ── Background removal ──
+        self._section_label(inner, "BACKGROUND REMOVAL")
+        self.bg_tol_lbl = self._val_label(
+            inner, f"{int(self._bg_tolerance_val)}%" if self._bg_tolerance_val > 0 else "off")
+        self.bg_tol_slider = ctk.CTkSlider(inner, from_=0, to=100,
+                                           command=self._on_bg_tolerance)
+        self.bg_tol_slider.pack(fill="x", padx=10, pady=(0, 4))
+        self.bg_tol_slider.set(self._bg_tolerance_val)
+
+        ctk.CTkButton(
+            inner, text="Save Cleaned PNG", height=28,
+            font=ctk.CTkFont(size=11),
+            command=self._save_cleaned_wm
+        ).pack(fill="x", padx=10, pady=(0, 10))
+
+        # ── Negative variant ──
+        self._section_label(inner, "NEGATIVE VARIANT")
+        self.neg_path_label = ctk.CTkLabel(
+            inner,
+            text=self._fmt_path(self.wm_neg_path) or "Not generated yet",
+            font=ctk.CTkFont(family="Courier New", size=9),
+            text_color=("gray40", "gray60"),
+            wraplength=220, justify="left", anchor="w"
+        )
+        self.neg_path_label.pack(anchor="w", padx=14, pady=(2, 4))
+
+        neg_btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+        neg_btn_row.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkButton(neg_btn_row, text="Generate", width=90, height=26,
+                      command=self._generate_negative).pack(side="left")
+        ctk.CTkButton(neg_btn_row, text="✕ Clear", width=66, height=26,
+                      fg_color=("gray70", "gray30"),
+                      hover_color=("gray60", "gray40"),
+                      command=self._clear_negative).pack(side="right")
 
         # Divider
         ctk.CTkFrame(inner, height=1,
@@ -364,10 +438,177 @@ class WatermarkStudio:
         if path:
             self._load_test(path)
 
+    def _clear_wm(self):
+        self.wm_img = None
+        self._wm_original = None
+        self.wm_neg_img = None
+        self.wm_path = ""
+        self.wm_neg_path = ""
+        self.wm_path_label.configure(text="Drop watermark here")
+        if hasattr(self, 'neg_path_label'):
+            self.neg_path_label.configure(text="Not generated yet")
+        self._schedule_preview()
+        self._status("Watermark cleared")
+
+    def _clear_test(self):
+        self.test_img = None
+        self.test_path = ""
+        self.test_path_label.configure(text="Drop test image here")
+        self._schedule_preview()
+        self._status("Test image cleared")
+
+    # ── Background removal ────────────────────────────────────────────────────
+
+    def _on_bg_tolerance(self, val):
+        self._bg_tolerance_val = int(val)
+        label = f"{int(val)}%" if val > 0 else "off"
+        self.bg_tol_lbl.configure(text=label)
+        if self._wm_original:
+            self.wm_img = self._wm_original.copy()
+            if self._bg_tolerance_val > 0:
+                self._apply_bg_removal()
+        self._schedule_preview()
+
+    def _apply_bg_removal(self):
+        """Remove background from wm_img based on corner-sampled color."""
+        if self._wm_original is None:
+            return
+        img = self._wm_original.copy()
+        px = img.load()
+        w, h = img.size
+
+        # Sample corners (and one pixel inward) to detect background color
+        samples = []
+        for sx, sy in [(0, 0), (w-1, 0), (0, h-1), (w-1, h-1),
+                        (1, 1), (w-2, 1), (1, h-2), (w-2, h-2)]:
+            if 0 <= sx < w and 0 <= sy < h:
+                samples.append(px[sx, sy][:3])
+        bg_r = sum(s[0] for s in samples) // len(samples)
+        bg_g = sum(s[1] for s in samples) // len(samples)
+        bg_b = sum(s[2] for s in samples) // len(samples)
+
+        # Use PIL channel operations for speed
+        bg_flat = Image.new('RGB', img.size, (bg_r, bg_g, bg_b))
+        diff = ImageChops.difference(img.convert('RGB'), bg_flat)
+        # Max channel difference as distance metric
+        r_ch, g_ch, b_ch = diff.split()
+        dist = ImageChops.lighter(ImageChops.lighter(r_ch, g_ch), b_ch)
+
+        # Build alpha: transparent where close to bg, gradient at edges
+        tol = self._bg_tolerance_val * 2.55          # map 0-100 → 0-255
+        outer = min(tol * 1.5, 255)
+        span = max(outer - tol, 1)
+
+        new_alpha = dist.point(lambda d: 0 if d <= tol else
+                               (int((d - tol) / span * 255) if d < outer else 255))
+
+        # Combine with original alpha (preserve existing transparency)
+        orig_alpha = img.split()[3]
+        final_alpha = ImageChops.darker(orig_alpha, new_alpha)
+
+        r, g, b, _ = img.split()
+        self.wm_img = Image.merge('RGBA', (r, g, b, final_alpha))
+
+    def _save_cleaned_wm(self):
+        """Save the bg-removed watermark to a new PNG file."""
+        if not self.wm_img:
+            self._status("Load a watermark first.", error=True)
+            return
+        init_name = (os.path.splitext(os.path.basename(self.wm_path))[0] + "_clean.png"
+                     if self.wm_path else "watermark_clean.png")
+        path = filedialog.asksaveasfilename(
+            title="Save Cleaned Watermark",
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png")],
+            initialfile=init_name
+        )
+        if not path:
+            return
+        try:
+            self.wm_img.save(path)
+            # Point at the cleaned file going forward
+            self.wm_path = path
+            self._wm_original = self.wm_img.copy()
+            self._bg_tolerance_val = 0
+            self.bg_tol_slider.set(0)
+            self.bg_tol_lbl.configure(text="off")
+            self.wm_path_label.configure(text=self._fmt_path(path))
+            self._status(f"Saved cleaned watermark: {os.path.basename(path)}")
+        except Exception as e:
+            self._status(f"Save failed: {e}", error=True)
+
+    # ── Negative variant ──────────────────────────────────────────────────────
+
+    def _generate_negative(self):
+        """Invert RGB channels of current watermark, keep alpha. Save to disk."""
+        if not self.wm_img:
+            self._status("Load a watermark first.", error=True)
+            return
+
+        # Invert RGB, preserve alpha
+        r, g, b, a = self.wm_img.split()
+        rgb_inv = ImageOps.invert(Image.merge('RGB', (r, g, b)))
+        self.wm_neg_img = Image.merge('RGBA', (*rgb_inv.split(), a))
+
+        # Auto-generate save path next to current watermark
+        if self.wm_path:
+            base, _ = os.path.splitext(self.wm_path)
+            neg_path = base + "_negative.png"
+        else:
+            neg_path = os.path.join(_SCRIPT_DIR, "watermark_negative.png")
+
+        try:
+            self.wm_neg_img.save(neg_path)
+            self.wm_neg_path = neg_path
+            self.neg_path_label.configure(text=self._fmt_path(neg_path))
+            self._schedule_preview()
+            self._status(f"Negative saved: {os.path.basename(neg_path)}")
+        except Exception as e:
+            self._status(f"Failed to save negative: {e}", error=True)
+
+    def _clear_negative(self):
+        self.wm_neg_img = None
+        self.wm_neg_path = ""
+        self.neg_path_label.configure(text="Not generated yet")
+        self._schedule_preview()
+        self._status("Negative variant cleared")
+
+    # ── Region luminance helper ───────────────────────────────────────────────
+
+    def _region_luminance(self, base_img):
+        """Mean luminance (0-255) of the region where the watermark would land."""
+        w, h = base_img.size
+        new_wm_w = max(1, int(w * self._scale_val))
+        ratio = new_wm_w / self.wm_img.width
+        new_wm_h = max(1, int(self.wm_img.height * ratio))
+
+        pad = int(self._padding_val)
+        x, y = {
+            "TL": (pad, pad),
+            "TR": (w - new_wm_w - pad, pad),
+            "BL": (pad, h - new_wm_h - pad),
+            "BR": (w - new_wm_w - pad, h - new_wm_h - pad),
+        }[self.position]
+
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(w, x + new_wm_w), min(h, y + new_wm_h)
+        region = base_img.crop((x1, y1, x2, y2)).convert("L")
+        data = region.tobytes()
+        return sum(data) / len(data) if data else 128
+
     def _load_wm(self, path):
         try:
-            self.wm_img  = Image.open(path).convert("RGBA")
+            self._wm_original = Image.open(path).convert("RGBA")
+            self.wm_img = self._wm_original.copy()
             self.wm_path = path
+            # Reset negative when loading a new watermark
+            self.wm_neg_img = None
+            self.wm_neg_path = ""
+            if hasattr(self, 'neg_path_label'):
+                self.neg_path_label.configure(text="Not generated yet")
+            # Apply bg removal if tolerance is set
+            if self._bg_tolerance_val > 0:
+                self._apply_bg_removal()
             self.wm_path_label.configure(text=self._fmt_path(path))
             self._schedule_preview()
             self._status(f"Watermark loaded — {os.path.basename(path)}")
@@ -386,6 +627,23 @@ class WatermarkStudio:
 
     # ── Drag-and-drop handler ──────────────────────────────────────────────────
 
+    def _is_over_widget(self, widget):
+        """Check if the mouse pointer is over the widget or any of its children."""
+        x = self.root.winfo_pointerx()
+        y = self.root.winfo_pointery()
+        target = self.root.winfo_containing(x, y)
+        if target is None:
+            return False
+        w = target
+        while w is not None:
+            if w is widget:
+                return True
+            try:
+                w = w.master
+            except AttributeError:
+                break
+        return False
+
     def _on_drop(self, event):
         files = []
         for m in re.findall(r'(?:\{([^\}]*)\}|([^\s]+))', event.data):
@@ -393,16 +651,21 @@ class WatermarkStudio:
             if p:
                 files.append(p)
 
-        for path in files:
-            ext = os.path.splitext(path)[1].lower()
-            if ext not in ('.png', '.jpg', '.jpeg', '.bmp', '.gif'):
-                continue
-            name = os.path.basename(path).lower()
-            # Route: if filename hints watermark, or no wm loaded yet → watermark slot
-            if not self.wm_img or any(x in name for x in ('wm', 'watermark', 'logo', 'mark', 'stamp')):
-                self._load_wm(path)
-            else:
-                self._load_test(path)
+        # Filter to image files
+        images = [p for p in files
+                  if os.path.splitext(p)[1].lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.gif')]
+        if not images:
+            return
+
+        # Route based on drop location (first image file only)
+        path = images[0]
+        if self._is_over_widget(self.wm_drop_zone):
+            self._load_wm(path)
+        elif self._is_over_widget(self.test_drop_zone):
+            self._load_test(path)
+        else:
+            # Anywhere else (including preview area) → test image
+            self._load_test(path)
 
     # ── Preview compositing ────────────────────────────────────────────────────
 
@@ -419,13 +682,25 @@ class WatermarkStudio:
             self.preview_label.configure(
                 image=None,
                 text="Load a watermark and a test image to begin\n\n"
-                     "Browse using the panel on the left,\nor drop files anywhere on this window."
+                     "Browse or drop files into the\ncolored zones on the left panel."
             )
             self._preview_ctk_img = None
             self.info_label.configure(text="")
             return
 
-        composited = self._composite(self.test_img, self.wm_img)
+        # Auto-select watermark variant if both exist
+        chosen_wm = self.wm_img
+        variant_tag = ""
+        if self.wm_img and self.wm_neg_img:
+            lum = self._region_luminance(self.test_img)
+            if lum > 128:
+                chosen_wm = self.wm_img
+                variant_tag = "  ·  auto: dark wm"
+            else:
+                chosen_wm = self.wm_neg_img
+                variant_tag = "  ·  auto: light wm"
+
+        composited = self._composite(self.test_img, chosen_wm)
 
         # Scale to fit the preview label widget
         pw = max(self.preview_label.winfo_width(),  100)
@@ -442,7 +717,7 @@ class WatermarkStudio:
         self.preview_label.configure(image=self._preview_ctk_img, text="")
 
         wm_label = f"no watermark" if not self.wm_img else \
-                   f"scale {int(self._scale_val * 100)}%  ·  opacity {int(self._opacity_val * 100)}%  ·  {self.position}  ·  pad {int(self._padding_val)}px"
+                   f"scale {int(self._scale_val * 100)}%  ·  opacity {int(self._opacity_val * 100)}%  ·  {self.position}  ·  pad {int(self._padding_val)}px{variant_tag}"
         self.info_label.configure(text=f"{iw}×{ih}  ·  {wm_label}")
 
     def _composite(self, base_img, wm_img):
